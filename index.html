@@ -237,8 +237,9 @@
 
 <div class="toolbar">
   <span class="toolbar-label">Ações:</span>
+  <button class="btn btn-cyan" onclick="salvarAlteracoes()">💾 Salvar alterações</button>
+  <button class="btn btn-danger" onclick="resetGithubToken()">🔐 Token GitHub</button>
   <button class="btn btn-cyan" onclick="window.print()">🖨 Imprimir</button>
-  <button class="btn btn-ghost" onclick="exportHTML()">💾 Salvar HTML</button>
   <button class="btn btn-ghost" id="editModeBtn" onclick="toggleEditMode()">✏️ Modo Edição</button>
   <button class="btn btn-ghost" onclick="openDatasModal()">🗓 Datas Comemorativas</button>
   <div class="month-nav" id="monthNav"><button class="month-btn" id="mnav0">Jan</button><button class="month-btn" id="mnav1">Fev</button><button class="month-btn" id="mnav2">Mar</button><button class="month-btn active" id="mnav3">Abr</button><button class="month-btn" id="mnav4">Mai</button><button class="month-btn" id="mnav5">Jun</button><button class="month-btn" id="mnav6">Jul</button><button class="month-btn" id="mnav7">Ago</button><button class="month-btn" id="mnav8">Set</button><button class="month-btn" id="mnav9">Out</button><button class="month-btn" id="mnav10">Nov</button><button class="month-btn" id="mnav11">Dez</button></div>
@@ -1356,6 +1357,175 @@ const observer = new IntersectionObserver((entries)=>{
 },{threshold:0.15});
 document.querySelectorAll('.month-block').forEach(el=>observer.observe(el));
 </script><input type="file" accept="image/*" multiple="" style="display: none;">
+
+<script>
+/* =========================
+   CONFIG FIXA GITHUB
+========================= */
+const GITHUB_CONFIG = {
+  owner: "DigiThree-Planejamentos",
+  repo: "calendario-marco-lorenzo",
+  path: "index.html",
+  branch: "main"
+};
+
+/* =========================
+   TOKEN
+========================= */
+function getGithubToken() {
+  let token = localStorage.getItem("github_token");
+
+  if (!token) {
+    token = prompt("Cole seu token do GitHub:");
+    if (!token) throw new Error("Token não informado.");
+    localStorage.setItem("github_token", token);
+  }
+
+  return token;
+}
+
+function resetGithubToken() {
+  localStorage.removeItem("github_token");
+  alert("Token removido. Será solicitado novamente.");
+}
+
+/* =========================
+   COLETAR ESTADO
+========================= */
+function collectCalendarState() {
+  return {
+    posts: window.POSTS || [],
+    plan: window.PLAN_DATA || {},
+    months: window.MONTHS_CONFIG || {},
+    header: {
+      client: document.getElementById("hdrClient")?.innerText,
+      year: document.getElementById("hdrYear")?.innerText,
+      sub: document.getElementById("hdrSub")?.innerText
+    },
+    notes: [...document.querySelectorAll(".month-notes")].map(el => ({
+      month: el.dataset.month,
+      text: el.innerHTML
+    }))
+  };
+}
+
+/* =========================
+   APLICAR ESTADO
+========================= */
+function applyCalendarState(state) {
+  if (!state) return;
+
+  window.POSTS = state.posts || [];
+  window.PLAN_DATA = state.plan || {};
+  window.MONTHS_CONFIG = state.months || {};
+
+  if (state.header) {
+    document.getElementById("hdrClient").innerText = state.header.client || "";
+    document.getElementById("hdrYear").innerText = state.header.year || "";
+    document.getElementById("hdrSub").innerText = state.header.sub || "";
+  }
+
+  if (state.notes) {
+    state.notes.forEach(n => {
+      const el = document.querySelector(`.month-notes[data-month="${n.month}"]`);
+      if (el) el.innerHTML = n.text;
+    });
+  }
+}
+
+/* =========================
+   EMBUTIR ESTADO NO HTML
+========================= */
+function buildPersistentHtml(state) {
+  let html = document.documentElement.outerHTML;
+
+  const scriptTag = `<script>
+window.__PERSISTED_CALENDAR_STATE__ = ${JSON.stringify(state)};
+<\/script>`;
+
+  if (html.includes("window.__PERSISTED_CALENDAR_STATE__")) {
+    html = html.replace(
+      /window\.__PERSISTED_CALENDAR_STATE__\s*=\s*{[\s\S]*?};/,
+      `window.__PERSISTED_CALENDAR_STATE__ = ${JSON.stringify(state)};`
+    );
+  } else {
+    html = html.replace("</body>", scriptTag + "\n</body>");
+  }
+
+  return html;
+}
+
+/* =========================
+   RESTAURAR AO CARREGAR
+========================= */
+window.addEventListener("load", () => {
+  if (window.__PERSISTED_CALENDAR_STATE__) {
+    applyCalendarState(window.__PERSISTED_CALENDAR_STATE__);
+  }
+});
+
+/* =========================
+   SALVAR NO GITHUB
+========================= */
+async function salvarAlteracoes() {
+  try {
+    const token = getGithubToken();
+
+    const { owner, repo, path, branch } = GITHUB_CONFIG;
+
+    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+
+    const getFile = await fetch(url, {
+      headers: {
+        Authorization: `token ${token}`
+      }
+    });
+
+    if (!getFile.ok) throw new Error("Erro ao buscar arquivo no GitHub");
+
+    const fileData = await getFile.json();
+
+    const state = collectCalendarState();
+    const newHtml = buildPersistentHtml(state);
+
+    const update = await fetch(url, {
+      method: "PUT",
+      headers: {
+        Authorization: `token ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        message: "Atualiza calendário editorial",
+        content: btoa(unescape(encodeURIComponent(newHtml))),
+        sha: fileData.sha,
+        branch: branch
+      })
+    });
+
+    if (!update.ok) {
+      const err = await update.json();
+      throw new Error(err.message);
+    }
+
+    alert("Alterações salvas com sucesso no GitHub 🚀");
+
+  } catch (e) {
+    console.error(e);
+    alert("Erro ao salvar: " + e.message);
+  }
+}
+
+/* =========================
+   EXPORT HTML
+========================= */
+function exportHTML() {
+  const blob = new Blob([document.documentElement.outerHTML], { type: "text/html" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "index.html";
+  a.click();
+}
+</script>
 
 
 </body></html>
